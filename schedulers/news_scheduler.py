@@ -6,7 +6,7 @@ import asyncio
 from config.settings import (
     POST_MAX_NEWS_PER_CYCLE,
     POST_MIN_SECONDS_BETWEEN_MESSAGES,
-    TARGET_CHANNEL_ID,
+    TARGET_CHANNEL_IDS,
 )
 from services.news import NewsService
 from services.posting import PostingService
@@ -71,16 +71,12 @@ class NewsScheduler:
             logger.info("🔍 Starting professional news briefing cycle...")
 
             if chat_list is None:
-                if TARGET_CHANNEL_ID:
-                    try:
-                        chat_id = int(TARGET_CHANNEL_ID)
-                        chat_list = [(chat_id, 'channel')]
-                        logger.info(f"✓ Target channel resolved: {chat_id}")
-                    except ValueError:
-                        logger.error(f"Invalid TARGET_CHANNEL_ID: {TARGET_CHANNEL_ID}")
-                        return
+                configured_targets = [(chat_id, 'channel') for chat_id in TARGET_CHANNEL_IDS]
+                if configured_targets:
+                    chat_list = configured_targets
+                    logger.info("✓ Target channels resolved: %s", [cid for cid, _ in configured_targets])
                 else:
-                    logger.warning("TARGET_CHANNEL_ID not set")
+                    logger.warning("No configured target channels are set")
                     return
 
             logger.info("📰 Fetching news articles...")

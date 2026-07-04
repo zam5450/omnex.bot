@@ -59,9 +59,34 @@ NEWSAPI_KEY = os.getenv('NEWSAPI_KEY', '')
 ALPHAVANTAGE_KEY = os.getenv('ALPHAVANTAGE_KEY', '')
 FINNHUB_KEY = os.getenv('FINNHUB_KEY', '')
 
-# Target Channel (from .env - REQUIRED)
+# Target Channel(s) (from .env - REQUIRED for the main broadcast channel)
 # Get channel ID by forwarding a message to @userinfobot
-TARGET_CHANNEL_ID = os.getenv('TARGET_CHANNEL_ID', '')
+TARGET_CHANNEL_ID = (os.getenv('TARGET_CHANNEL_ID', '') or '').strip()
+TARGET_CHANNELS = (os.getenv('TARGET_CHANNELS', '') or '').strip()
+
+
+def _parse_target_channel_ids(raw_value: str) -> list:
+    """Parse a comma-separated list of Telegram channel IDs."""
+    ids = []
+    if not raw_value:
+        return ids
+
+    for part in raw_value.split(','):
+        value = part.strip()
+        if not value:
+            continue
+        try:
+            ids.append(int(value))
+        except ValueError:
+            logger.error("Invalid Telegram channel ID configured: %s", value)
+    return ids
+
+
+TARGET_CHANNEL_IDS = [
+    chat_id for chat_id in dict.fromkeys(
+        _parse_target_channel_ids(TARGET_CHANNEL_ID) + _parse_target_channel_ids(TARGET_CHANNELS)
+    )
+]
 
 # Stock data - top 50 stocks
 TOP_STOCKS = [

@@ -2,7 +2,7 @@
 Analysis broadcasting scheduler.
 """
 import asyncio
-from config.settings import POST_MIN_SECONDS_BETWEEN_MESSAGES, TARGET_CHANNEL_ID
+from config.settings import POST_MIN_SECONDS_BETWEEN_MESSAGES, TARGET_CHANNEL_IDS
 from services.posting import PostingService
 from utils.logger import logger
 from services.analysis import AnalysisService
@@ -22,24 +22,28 @@ class AnalysisScheduler:
 
     @staticmethod
     def _resolve_destinations(bot_instance, chat_list: list = None) -> list:
-        """Resolve active user channels, with legacy TARGET_CHANNEL_ID as fallback."""
+        """Resolve configured target channels first, then active user channels."""
         if chat_list is not None:
             return chat_list
 
+        destinations = [
+            {"chat_id": chat_id, "referral_link": ""}
+            for chat_id in TARGET_CHANNEL_IDS
+        ]
+
         active_channels = bot_instance.get_active_channels()
-        if active_channels:
-            return active_channels
+        for channel in active_channels:
+            chat_id = channel.get("chat_id")
+            if chat_id is None:
+                continue
+            if any(existing.get("chat_id") == chat_id for existing in destinations):
+                continue
+            destinations.append(channel)
 
-        if TARGET_CHANNEL_ID:
-            try:
-                chat_id = int(TARGET_CHANNEL_ID)
-                logger.info(f"Legacy target channel resolved: {chat_id}")
-                return [{"chat_id": chat_id, "referral_link": ""}]
-            except ValueError:
-                logger.error(f"Invalid TARGET_CHANNEL_ID: {TARGET_CHANNEL_ID}")
-                return []
+        if destinations:
+            return destinations
 
-        logger.warning("No active user channels and TARGET_CHANNEL_ID is not set")
+        logger.warning("No broadcast destinations are configured")
         return []
 
     @staticmethod
