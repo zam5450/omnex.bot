@@ -91,4 +91,4 @@ dmypy.json
 cython_debug/
 
 
-.qwen
+.qwen/
