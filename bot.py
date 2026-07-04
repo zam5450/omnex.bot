@@ -151,23 +151,28 @@ async def main():
 
     try:
         def on_polling_error(exc: Exception):
-            """Stop this instance when Telegram reports concurrent polling."""
+            """Log polling issues without shutting down this instance."""
             if isinstance(exc, Conflict):
-                logger.error(
+                logger.warning(
                     "Polling conflict detected (another getUpdates consumer is active). "
-                    "Stopping this instance."
+                    "Continuing in passive mode for this instance."
                 )
-                if stop_event and not stop_event.is_set():
-                    stop_event.set()
+                return
+            logger.error("Polling error: %s", exc)
 
         await application.initialize()
         await application.start()
-        await application.updater.start_polling(
-            poll_interval=1.0,
-            allowed_updates=["message", "my_chat_member"],
-            drop_pending_updates=True,
-            error_callback=on_polling_error,
-        )
+        try:
+            await application.updater.start_polling(
+                poll_interval=1.0,
+                allowed_updates=["message", "my_chat_member"],
+                drop_pending_updates=True,
+                error_callback=on_polling_error,
+            )
+        except Conflict:
+            logger.warning(
+                "Telegram polling is already active in another instance; continuing without polling in this process."
+            )
 
         warmup_task = asyncio.create_task(startup_post(bot_instance))
 
@@ -183,6 +188,7 @@ async def main():
 
         periodic_tasks = await _ensure_periodic_jobs_alive()
 
+        logger.info("Bot is running; waiting for shutdown signal.")
         await stop_event.wait()
 
     except asyncio.CancelledError:
