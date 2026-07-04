@@ -147,32 +147,31 @@ async def main():
 
     application = await setup_bot()
 
-    logger.info("Starting bot polling...")
+    logger.info("Starting bot initialization...")
 
     try:
-        def on_polling_error(exc: Exception):
-            """Log polling issues without shutting down this instance."""
-            if isinstance(exc, Conflict):
-                logger.warning(
-                    "Polling conflict detected (another getUpdates consumer is active). "
-                    "Continuing in passive mode for this instance."
+        async def start_polling_if_available():
+            """Start Telegram polling only if no other instance is already using it."""
+            try:
+                await application.updater.start_polling(
+                    poll_interval=1.0,
+                    allowed_updates=["message", "my_chat_member"],
+                    drop_pending_updates=True,
+                    error_callback=lambda exc: logger.warning(
+                        "Polling warning: %s", exc
+                    ),
                 )
-                return
-            logger.error("Polling error: %s", exc)
+                logger.info("Telegram polling started for this instance.")
+            except Conflict:
+                logger.warning(
+                    "Telegram polling is already active in another instance; continuing without polling in this process."
+                )
+            except Exception as exc:
+                logger.error("Failed to start Telegram polling: %s", exc)
 
         await application.initialize()
         await application.start()
-        try:
-            await application.updater.start_polling(
-                poll_interval=1.0,
-                allowed_updates=["message", "my_chat_member"],
-                drop_pending_updates=True,
-                error_callback=on_polling_error,
-            )
-        except Conflict:
-            logger.warning(
-                "Telegram polling is already active in another instance; continuing without polling in this process."
-            )
+        await start_polling_if_available()
 
         warmup_task = asyncio.create_task(startup_post(bot_instance))
 
