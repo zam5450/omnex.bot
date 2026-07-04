@@ -13,10 +13,12 @@ from config.settings import (
     ANALYSIS_INTERVAL_MINUTES,
     BOT_TOKEN,
     KEEP_ALIVE,
+    NEWS_INTERVAL_MINUTES,
 )
 from database.db import MarketBot
 from handlers.onboarding import register_onboarding_handlers
 from schedulers.analysis_scheduler import AnalysisScheduler
+from schedulers.news_scheduler import NewsScheduler
 from utils.keep_alive import start_keep_alive, ping_server
 
 
@@ -26,6 +28,7 @@ bot_instance = None
 stop_event: asyncio.Event = None
 
 ANALYSIS_INTERVAL_SECONDS = ANALYSIS_INTERVAL_MINUTES * 60
+NEWS_INTERVAL_SECONDS = NEWS_INTERVAL_MINUTES * 60
 QUICK_RETRY_SECONDS = 10 * 60
 
 
@@ -130,6 +133,9 @@ async def _ensure_periodic_jobs_alive():
     monitor_tasks = [
         asyncio.create_task(
             monitor_and_restart("stock_snapshot_broadcast", ANALYSIS_INTERVAL_SECONDS, AnalysisScheduler.broadcast_analysis)
+        ),
+        asyncio.create_task(
+            monitor_and_restart("news_broadcast", NEWS_INTERVAL_SECONDS, NewsScheduler.broadcast_news)
         ),
     ]
 
