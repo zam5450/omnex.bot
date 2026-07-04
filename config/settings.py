@@ -39,12 +39,11 @@ POST_MIN_SECONDS_BETWEEN_MESSAGES = 0.8
 # Send briefing header before news cards
 SEND_BRIEFING_INTRO = True
 
-# Scheduler cadence - CRITICAL for consistent posting
-# News check every 15 minutes = ~4 posts/hour minimum
+# Scheduler cadence - channel owner product posts stock snapshots every 4 hours.
 NEWS_INTERVAL_MINUTES = 15
 
-# Analysis broadcast every 60 minutes = guaranteed market updates
-ANALYSIS_INTERVAL_MINUTES = 60
+# Stock snapshot broadcast every 4 hours.
+ANALYSIS_INTERVAL_MINUTES = 240
 
 # Keep-Alive settings - REQUIRED for Render free tier
 # Must ping every <15 min or Render will spin down

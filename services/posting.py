@@ -1,4 +1,4 @@
-"""
+﻿"""
 Professional post formatting and post-governance helpers.
 """
 from datetime import datetime, timezone
@@ -12,7 +12,7 @@ class PostingService:
     """Centralized post structure for reliable, professional broadcasts."""
 
     DISCLAIMER = "Educational market update only. Not financial advice."
-    DISCLAIMER = "<i><a href='https://omnexfinancial.com'>Build your portfolio with omnexfinancial.com</a></i>"
+    DEFAULT_PLATFORM_LINK = "https://omnexfinancial.com"
 
     @staticmethod
     def _build_impact_line(article: dict) -> str:
@@ -35,6 +35,27 @@ class PostingService:
         return published_dt.strftime("%Y-%m-%d %H:%M UTC")
 
     @staticmethod
+    def format_default_platform_link() -> str:
+        """Fallback platform link for legacy single-channel posts."""
+        return (
+            "<i><a href='https://omnexfinancial.com'>"
+            "Build your portfolio with omnexfinancial.com"
+            "</a></i>"
+        )
+
+    @staticmethod
+    def format_referral_ad(referral_link: str) -> str:
+        """Personalized platform ad appended to owner channel posts."""
+        clean_link = escape((referral_link or "").strip(), quote=True)
+        if not clean_link:
+            return ""
+        return (
+            "<b>Omnex Financial</b> is an intelligent platform that helps investor aquire stocks, bonds, REITS, tokenized commodites and amazing vesting stock options, to build a smarter portfolio.\n"
+            f"Here is my referral link: <a href='{clean_link}'>join here</a> "
+            "and get up to $200 on your first deposit."
+        )
+
+    @staticmethod
     def format_news_briefing_intro(articles: list) -> str:
         """Header message sent once before news story cards."""
         market_count = sum(1 for a in articles if a.get("category") == "market")
@@ -47,12 +68,13 @@ class PostingService:
             f"Coverage: <b>{market_count}</b> market | <b>{commodity_count}</b> commodities\n\n"
             "Focus: market-moving headlines with context, timing, and source credibility.\n"
             "News feed only in this bulletin. Stock signal data is published separately.\n\n"
-            f"<i>{PostingService.DISCLAIMER}</i>"
+            f"<i>{PostingService.DISCLAIMER}</i>\n"
+            f"{PostingService.format_default_platform_link()}"
         )
 
     @staticmethod
-    def format_market_snapshot_message(stock_prices: list) -> str:
-        """Standalone market snapshot message (separate from news cards)."""
+    def format_market_snapshot_message(stock_prices: list, referral_link: str = "") -> str:
+        """Standalone market snapshot message with an optional personalized ad."""
         generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         lines = [
             "<b>Market Snapshot | Top Performing Stocks</b>",
@@ -72,6 +94,12 @@ class PostingService:
 
         lines.append("")
         lines.append(f"<i>{PostingService.DISCLAIMER}</i>")
+        referral_ad = PostingService.format_referral_ad(referral_link)
+        if referral_ad:
+            lines.append("")
+            lines.append(referral_ad)
+        else:
+            lines.append(PostingService.format_default_platform_link())
         return "\n".join(lines).strip()
 
     @staticmethod
@@ -90,7 +118,8 @@ class PostingService:
             f"<b>What happened</b>\n{description}\n\n"
             f"<b>{impact_line}</b>\n\n"
             f"<a href='{url}'>Read full story and market implications</a>\n\n"
-            f"<i>{PostingService.DISCLAIMER}</i>"
+            f"<i>{PostingService.DISCLAIMER}</i>\n"
+            f"{PostingService.format_default_platform_link()}"
         )[:1000]
 
     @staticmethod
@@ -103,7 +132,8 @@ class PostingService:
                 f"Published: <b>{generated_at}</b>\n\n"
                 "No strong directional setups detected this cycle.\n"
                 "Condition: Neutral / mixed momentum.\n\n"
-                f"<i>{PostingService.DISCLAIMER}</i>"
+                f"<i>{PostingService.DISCLAIMER}</i>\n"
+                f"{PostingService.format_default_platform_link()}"
             )
 
         lines = [
@@ -125,6 +155,7 @@ class PostingService:
             lines.append("")
 
         lines.append(f"<i>{PostingService.DISCLAIMER}</i>")
+        lines.append(PostingService.format_default_platform_link())
         message = "\n".join(lines).strip()
         if len(message) > 3800:
             logger.warning("Analysis bulletin exceeded preferred length; trimming output.")

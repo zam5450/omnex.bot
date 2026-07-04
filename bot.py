@@ -1,22 +1,21 @@
 """
-Main bot initialization and event loop
-Posts finance news to a single target channel on a schedule.
+Main bot initialization and event loop.
+Onboards channel owners and posts stock snapshots with owner referral links.
 """
 import asyncio
 import signal
-from telegram.ext import Application
+
 from telegram.error import Conflict
+from telegram.ext import Application
 
 from utils.logger import setup_logging
 from config.settings import (
     ANALYSIS_INTERVAL_MINUTES,
     BOT_TOKEN,
     KEEP_ALIVE,
-    NEWS_INTERVAL_MINUTES,
-    TARGET_CHANNEL_ID,
 )
 from database.db import MarketBot
-from schedulers.news_scheduler import NewsScheduler
+from handlers.onboarding import register_onboarding_handlers
 from schedulers.analysis_scheduler import AnalysisScheduler
 from utils.keep_alive import start_keep_alive, ping_server
 
@@ -26,13 +25,12 @@ logger = setup_logging()
 bot_instance = None
 stop_event: asyncio.Event = None
 
-NEWS_INTERVAL_SECONDS = NEWS_INTERVAL_MINUTES * 60
 ANALYSIS_INTERVAL_SECONDS = ANALYSIS_INTERVAL_MINUTES * 60
-QUICK_RETRY_SECONDS = 10 * 60  # 10 min retry when no news available
+QUICK_RETRY_SECONDS = 10 * 60
 
 
 class NoContentAvailable(Exception):
-    """Raised when all news sources are empty and bot has nothing to post."""
+    """Raised when data sources are empty and bot has nothing to post."""
     pass
 
 
@@ -60,52 +58,31 @@ async def _run_periodic_job(name: str, interval_seconds: int, job_coro):
             logger.info(f"{name}: execution completed")
             next_run = loop.time() + interval_seconds
         except NoContentAvailable:
-            # All sources empty - recheck in 10 minutes instead of full interval.
             logger.warning(f"{name}: no content available, quick retry in {QUICK_RETRY_SECONDS}s")
             next_run = loop.time() + QUICK_RETRY_SECONDS
         except Exception as e:
             logger.error(f"{name}: execution failed: {e}")
-            # Retry sooner after failure rather than waiting full interval.
             next_run = loop.time() + min(300, interval_seconds)
 
     logger.info(f"{name} loop stopped")
 
 
-async def startup_post(bot_instance, max_wait_seconds: int = 60, poll_interval_seconds: int = 10):
-    """Wait for target channel to be configured, then do immediate first post."""
-    elapsed = 0
-    while elapsed <= max_wait_seconds:
-        if TARGET_CHANNEL_ID:
-            try:
-                chat_id = int(TARGET_CHANNEL_ID)
-                chat_list = [(chat_id, 'channel')]
-                logger.info(f"Target channel {chat_id} configured. Running startup posts.")
+async def startup_post(bot_instance):
+    """Post one stock snapshot to active channels after startup, if any exist."""
+    active_channels = bot_instance.get_active_channels()
+    if not active_channels:
+        logger.info("No active user channels at startup. Waiting for /start onboarding.")
+        return
 
-                # Skip health message - go straight to news and analysis posts
-                try:
-                    await NewsScheduler.broadcast_news(bot_instance, chat_list=chat_list)
-                except Exception as e:
-                    logger.error(f"Startup news post failed: {e}")
-
-                try:
-                    await AnalysisScheduler.broadcast_analysis(bot_instance, chat_list=chat_list)
-                except Exception as e:
-                    logger.error(f"Startup analysis post failed: {e}")
-
-                return
-            except ValueError:
-                logger.error(f"Invalid TARGET_CHANNEL_ID: {TARGET_CHANNEL_ID}")
-                return
-
-        logger.info("Waiting for TARGET_CHANNEL_ID configuration...")
-        await asyncio.sleep(poll_interval_seconds)
-        elapsed += poll_interval_seconds
-
-    logger.warning("Startup post timed out. Periodic loops remain active.")
+    logger.info("Running startup stock snapshot for %d active channels.", len(active_channels))
+    try:
+        await AnalysisScheduler.broadcast_analysis(bot_instance, chat_list=active_channels)
+    except Exception as e:
+        logger.error(f"Startup stock snapshot failed: {e}")
 
 
 async def setup_bot():
-    """Initialize bot and database."""
+    """Initialize bot, database, and Telegram handlers."""
     global bot_instance
 
     try:
@@ -119,14 +96,9 @@ async def setup_bot():
         application.bot_data["bot_instance"] = bot_instance
         application.bot_data["bot"] = application.bot
         bot_instance.bot = application.bot
+        register_onboarding_handlers(application)
 
-        if TARGET_CHANNEL_ID:
-            logger.info(f"Target channel: {TARGET_CHANNEL_ID}")
-        else:
-            logger.warning("TARGET_CHANNEL_ID not set - bot will not post anywhere")
-
-        logger.info("News broadcast interval: %d minutes", NEWS_INTERVAL_MINUTES)
-        logger.info("Analysis broadcast interval: %d minutes", ANALYSIS_INTERVAL_MINUTES)
+        logger.info("Stock snapshot broadcast interval: %d minutes", ANALYSIS_INTERVAL_MINUTES)
 
         return application
 
@@ -138,40 +110,38 @@ async def setup_bot():
 async def _ensure_periodic_jobs_alive():
     """Monitor and restart periodic jobs if they crash."""
     logger.info("Starting periodic job monitor...")
-    
-    async def monitor_and_restart(name: str, interval: int, job_coro, task_list: list, index: int):
+
+    async def monitor_and_restart(name: str, interval: int, job_coro):
         """Keep a periodic job alive by restarting if it crashes."""
         while not stop_event.is_set():
             try:
                 logger.info(f"Starting {name} job...")
                 await _run_periodic_job(name, interval, job_coro)
             except Exception as e:
-                logger.error(f"❌ {name} job crashed: {e}", exc_info=True)
+                logger.error(f"{name} job crashed: {e}", exc_info=True)
                 if not stop_event.is_set():
                     logger.info(f"Restarting {name} job in 5 seconds...")
                     await asyncio.sleep(5)
-            
+
             if stop_event.is_set():
                 break
-    
-    # Keep track of monitor tasks
+
     monitor_tasks = [
         asyncio.create_task(
-            monitor_and_restart("news_broadcast", NEWS_INTERVAL_SECONDS, NewsScheduler.broadcast_news, [], 0)
-        ),
-        asyncio.create_task(
-            monitor_and_restart("analysis_broadcast", ANALYSIS_INTERVAL_SECONDS, AnalysisScheduler.broadcast_analysis, [], 1)
+            monitor_and_restart("stock_snapshot_broadcast", ANALYSIS_INTERVAL_SECONDS, AnalysisScheduler.broadcast_analysis)
         ),
     ]
-    
+
     return monitor_tasks
 
 
 async def main():
     """Main async entry point."""
+    ping_task = None
+    periodic_tasks = []
+
     if KEEP_ALIVE:
         start_keep_alive()
-        # Ping every 4 minutes (240s) to stay well below Render's 15-min spin-down threshold
         ping_task = asyncio.create_task(ping_server(port=8080, interval_seconds=240))
         logger.info("Keep-alive HTTP pings scheduled (every 4 minutes)")
 
@@ -194,12 +164,11 @@ async def main():
         await application.start()
         await application.updater.start_polling(
             poll_interval=1.0,
-            allowed_updates=["message", "callback_query"],
+            allowed_updates=["message", "my_chat_member"],
             drop_pending_updates=True,
             error_callback=on_polling_error,
         )
 
-        # Fire immediate startup posts.
         warmup_task = asyncio.create_task(startup_post(bot_instance))
 
         def _log_warmup_outcome(task: asyncio.Task):
@@ -212,7 +181,6 @@ async def main():
 
         warmup_task.add_done_callback(_log_warmup_outcome)
 
-        # Start resilient periodic jobs that auto-restart if they crash
         periodic_tasks = await _ensure_periodic_jobs_alive()
 
         await stop_event.wait()
@@ -225,6 +193,10 @@ async def main():
                 task.cancel()
         if periodic_tasks:
             await asyncio.gather(*periodic_tasks, return_exceptions=True)
+
+        if ping_task and not ping_task.done():
+            ping_task.cancel()
+            await asyncio.gather(ping_task, return_exceptions=True)
 
         if application.updater:
             await application.updater.stop()

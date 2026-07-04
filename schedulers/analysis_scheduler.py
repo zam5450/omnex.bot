@@ -1,5 +1,5 @@
 """
-Analysis broadcasting scheduler
+Analysis broadcasting scheduler.
 """
 import asyncio
 from config.settings import POST_MIN_SECONDS_BETWEEN_MESSAGES, TARGET_CHANNEL_ID
@@ -9,58 +9,82 @@ from services.analysis import AnalysisService
 
 
 class AnalysisScheduler:
-    """Handle scheduled analysis broadcasting."""
+    """Handle scheduled stock snapshot broadcasting."""
+
+    @staticmethod
+    def _normalize_destination(destination):
+        """Return chat_id and referral link from legacy tuples or channel dicts."""
+        if isinstance(destination, dict):
+            return destination.get("chat_id"), destination.get("referral_link", "")
+        if isinstance(destination, (list, tuple)):
+            return destination[0], destination[2] if len(destination) > 2 else ""
+        return destination, ""
+
+    @staticmethod
+    def _resolve_destinations(bot_instance, chat_list: list = None) -> list:
+        """Resolve active user channels, with legacy TARGET_CHANNEL_ID as fallback."""
+        if chat_list is not None:
+            return chat_list
+
+        active_channels = bot_instance.get_active_channels()
+        if active_channels:
+            return active_channels
+
+        if TARGET_CHANNEL_ID:
+            try:
+                chat_id = int(TARGET_CHANNEL_ID)
+                logger.info(f"Legacy target channel resolved: {chat_id}")
+                return [{"chat_id": chat_id, "referral_link": ""}]
+            except ValueError:
+                logger.error(f"Invalid TARGET_CHANNEL_ID: {TARGET_CHANNEL_ID}")
+                return []
+
+        logger.warning("No active user channels and TARGET_CHANNEL_ID is not set")
+        return []
 
     @staticmethod
     async def broadcast_analysis(bot_instance, chat_list: list = None):
-        """Broadcast stock performance snapshots to the target channel (market prices only, no signals)."""
+        """Broadcast stock performance snapshots plus each channel owner's ad."""
         try:
-            logger.info("📊 Starting analysis broadcast (market snapshot only)...")
+            logger.info("Starting stock snapshot broadcast...")
 
-            if chat_list is None:
-                if TARGET_CHANNEL_ID:
-                    try:
-                        chat_id = int(TARGET_CHANNEL_ID)
-                        chat_list = [(chat_id, 'channel')]
-                    except ValueError:
-                        logger.error(f"Invalid TARGET_CHANNEL_ID: {TARGET_CHANNEL_ID}")
-                        return
-                else:
-                    logger.warning("TARGET_CHANNEL_ID not set")
-                    return
-
-            chat_id, _ = chat_list[0]
+            destinations = AnalysisScheduler._resolve_destinations(bot_instance, chat_list)
+            if not destinations:
+                return
 
             stock_prices = await AnalysisService.fetch_top_stock_prices()
-            snapshot_message = PostingService.format_market_snapshot_message(stock_prices)
 
-            # NOTE: Signals/analysis data NO LONGER posted - market snapshot only
-            for cid, _chat_type in chat_list:
+            successful = 0
+            for destination in destinations:
+                cid, referral_link = AnalysisScheduler._normalize_destination(destination)
+                if not cid:
+                    continue
+
+                snapshot_message = PostingService.format_market_snapshot_message(
+                    stock_prices,
+                    referral_link=referral_link,
+                )
                 try:
                     await bot_instance.bot.send_message(
                         chat_id=cid,
                         text=snapshot_message,
                         parse_mode='HTML',
                     )
+                    successful += 1
                 except Exception as e:
-                    logger.error(f"Failed to send analysis to chat {cid}: {e}")
+                    logger.error(f"Failed to send stock snapshot to chat {cid}: {e}")
 
-            logger.info("✅ Analysis broadcast complete (snapshot posted)")
+                await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
+
+            logger.info("Stock snapshot broadcast complete: %d/%d channels", successful, len(destinations))
 
         except Exception as e:
             logger.error(f"Analysis broadcast failed: {e}")
-            # Last resort: try to post at least something.
             try:
-                if chat_list:
-                    cid, _ = chat_list[0]
-                    from datetime import datetime, timezone
-                    fallback = (
-                        f"<b>Market Snapshot</b>\n"
-                        f"Published: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                        "Market data temporarily unavailable.\n"
-                        "<i>Educational market update only. Not financial advice.</i>"
-                        "<i>omnexfinancial.com</i>"
-                    )
+                destinations = AnalysisScheduler._resolve_destinations(bot_instance, chat_list)
+                if destinations:
+                    cid, referral_link = AnalysisScheduler._normalize_destination(destinations[0])
+                    fallback = PostingService.format_market_snapshot_message([], referral_link=referral_link)
                     await bot_instance.bot.send_message(
                         chat_id=cid,
                         text=fallback,
@@ -83,15 +107,7 @@ class AnalysisScheduler:
 
             if market.lower() == 'stocks':
                 stock_prices = await AnalysisService.fetch_top_stock_prices()
-                snapshot_message = PostingService.format_market_snapshot_message(stock_prices)
-                signals = await AnalysisService.fetch_top_stocks_analysis()
-                message = PostingService.format_analysis_bulletin(signals, "Stocks")
-                await bot_instance.bot.send_message(
-                    chat_id=chat_id,
-                    text=snapshot_message,
-                    parse_mode='HTML',
-                )
-                await asyncio.sleep(POST_MIN_SECONDS_BETWEEN_MESSAGES)
+                message = PostingService.format_market_snapshot_message(stock_prices)
             else:
                 message = "Unknown market type. Use 'stocks'."
 
