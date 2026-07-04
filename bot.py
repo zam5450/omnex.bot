@@ -68,15 +68,16 @@ async def _run_periodic_job(name: str, interval_seconds: int, job_coro):
 
 
 async def startup_post(bot_instance):
-    """Post one stock snapshot to active channels after startup, if any exist."""
-    active_channels = bot_instance.get_active_channels()
-    if not active_channels:
-        logger.info("No active user channels at startup. Waiting for /start onboarding.")
+    """Post one stock snapshot to the configured target channel and any active owner channels after startup."""
+    destinations = AnalysisScheduler._resolve_destinations(bot_instance)
+
+    if not destinations:
+        logger.info("No broadcast destinations configured at startup. Waiting for /start onboarding.")
         return
 
-    logger.info("Running startup stock snapshot for %d active channels.", len(active_channels))
+    logger.info("Running startup stock snapshot for %d broadcast destinations.", len(destinations))
     try:
-        await AnalysisScheduler.broadcast_analysis(bot_instance, chat_list=active_channels)
+        await AnalysisScheduler.broadcast_analysis(bot_instance, chat_list=destinations)
     except Exception as e:
         logger.error(f"Startup stock snapshot failed: {e}")
 
@@ -150,28 +151,9 @@ async def main():
     logger.info("Starting bot initialization...")
 
     try:
-        async def start_polling_if_available():
-            """Start Telegram polling only if no other instance is already using it."""
-            try:
-                await application.updater.start_polling(
-                    poll_interval=1.0,
-                    allowed_updates=["message", "my_chat_member"],
-                    drop_pending_updates=True,
-                    error_callback=lambda exc: logger.warning(
-                        "Polling warning: %s", exc
-                    ),
-                )
-                logger.info("Telegram polling started for this instance.")
-            except Conflict:
-                logger.warning(
-                    "Telegram polling is already active in another instance; continuing without polling in this process."
-                )
-            except Exception as exc:
-                logger.error("Failed to start Telegram polling: %s", exc)
-
         await application.initialize()
         await application.start()
-        await start_polling_if_available()
+        logger.info("Telegram polling disabled in this instance; scheduled broadcasts will handle posting.")
 
         warmup_task = asyncio.create_task(startup_post(bot_instance))
 
